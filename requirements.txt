@@ -1,0 +1,12 @@
+streamlit
+requests
+python-dotenv
+Pillow
+plotly
+streamlit-lottie
+streamlit-option-menu
+folium 
+streamlit-folium
+reportlab==4.0.4
+geopy>=2.0.0
+fpdf
