@@ -36,13 +36,6 @@ def main():
     
     render_copyright()
 #!/usr/bin/env python3
-"""
-Premium Travel Assistant - Enhanced UI with Custom Background
-Professional Streamlit interface with all agents working
-"""
-#Crew is Called in main function
-#Crew Manages all agents 
-
 import os
 import json
 import requests
@@ -3562,4 +3555,5 @@ Unauthorized copying, distribution, or modification of this software
 may result in severe civil and criminal penalties.
 
 For licensing inquiries: vrushabhpatil97711@gmail.com
+
 """
