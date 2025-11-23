@@ -50,7 +50,7 @@ While other travel tools give you generic lists, Travel Tripy delivers **hyper-p
 
 ## 🚀 Live Demo
 
-[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-Click_Here-667eea?style=for-the-badge&logo=streamlit)](https://travel-tripy.streamlit.app)
+[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-Click_Here-667eea?style=for-the-badge&logo=streamlit)](https://travel-tripy.streamlit.app/)
 
 *Experience the future of travel planning today!*
 
