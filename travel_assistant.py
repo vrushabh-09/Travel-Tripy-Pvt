@@ -1002,13 +1002,13 @@ class BaseAgent:
     def __init__(self, name: str):
         self.name = name
     
-    def call_gemini(self, prompt: str, max_tokens: int = 500):  # 🔧 reduced tokens
+    def call_gemini(self, prompt: str, max_tokens: int = 500):
         """Call Gemini AI API with enhanced error handling"""
         if not GEMINI_API_KEY:
             return "🔑 Gemini API key not configured"
         
-        # 🔧 changed model to stable free-tier model
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # ✅ FIXED URL (works for all users)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
         
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -1020,11 +1020,14 @@ class BaseAgent:
         
         try:
             response = requests.post(url, json=payload, timeout=60)
-
-            # 🔧 handle quota error
+    
+            # ✅ FIXED: Proper error handling
             if response.status_code == 429:
-                return "⚠️ Gemini quota exceeded. Check billing or try later."
-
+                return "⚠️ Gemini quota exceeded. Enable billing or wait."
+    
+            if response.status_code == 404:
+                return "❌ Gemini model not available. Check API key / enable Gemini API."
+    
             if response.status_code == 200:
                 data = response.json()
                 if 'candidates' in data and len(data['candidates']) > 0:
@@ -1033,39 +1036,42 @@ class BaseAgent:
                     return "❌ No content in response from Gemini API"
             else:
                 return f"❌ Gemini API Error {response.status_code}: {response.text}"
+    
         except requests.exceptions.Timeout:
             return "⏰ Request timeout. Please try again."
         except Exception as e:
             return f"🔴 Gemini Error: {str(e)}"
     
-    def call_groq(self, prompt: str, max_tokens: int = 500):  # 🔧 reduced tokens
+    def call_groq(self, prompt: str, max_tokens: int = 500):
         """Call Groq API for fast responses"""
-        if not GROQ_API_KEY or GROQ_API_KEY.strip() == "":
+        if not GROQ_API_KEY:
             return "🔑 Groq API key not configured"
         
         url = "https://api.groq.com/openai/v1/chat/completions"
+    
         headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY.strip()}",  # 🔧 safer
+            # ✅ FIXED: removed .strip() (was breaking key)
+            "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json"
         }
+    
         payload = {
             "model": "llama-3.1-8b-instant",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.7
         }
-        
+    
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=60)
-
-            # 🔧 handle invalid key
+    
+            # ✅ FIXED: proper error handling
             if response.status_code == 401:
-                return "❌ Invalid Groq API Key"
-
-            # 🔧 handle rate limit
+                return "❌ Invalid Groq API Key (check secrets + reboot app)"
+    
             if response.status_code == 429:
                 return "⚠️ Groq rate limit exceeded"
-
+    
             if response.status_code == 200:
                 data = response.json()
                 if 'choices' in data and len(data['choices']) > 0:
@@ -1074,11 +1080,12 @@ class BaseAgent:
                     return "❌ No response content from Groq API"
             else:
                 return f"❌ Groq API Error {response.status_code}: {response.text}"
+    
         except requests.exceptions.Timeout:
             return "⏰ Request timeout. Please try again."
         except Exception as e:
             return f"🔴 Groq Error: {str(e)}"
-
+        
     def safe_json_parse(self, response: str, agent_type: str) -> Any:
         """Safely parse JSON response with comprehensive error handling and character cleaning"""
         if response.startswith("❌") or response.startswith("🔴") or response.startswith("⏰"):
