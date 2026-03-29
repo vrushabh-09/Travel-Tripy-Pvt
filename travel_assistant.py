@@ -984,9 +984,9 @@ def init_session_state():
         st.session_state.local_experiences_data = None
 
 # API Configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-OPENTRIPMAP_API_KEY = os.getenv("OPENTRIPMAP_API_KEY")
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+OPENTRIPMAP_API_KEY = st.secrets["OPENTRIPMAP_API_KEY"]
 
 @dataclass
 class TravelPlan:
