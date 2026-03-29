@@ -1087,70 +1087,66 @@ class BaseAgent:
             return f"🔴 Groq Error: {str(e)}"
         
     def safe_json_parse(self, response: str, agent_type: str) -> Any:
-        """Safely parse JSON response with comprehensive error handling and character cleaning"""
+        """Safely parse JSON response with enhanced error handling (FIXED)"""
         if response.startswith("❌") or response.startswith("🔴") or response.startswith("⏰"):
             st.error(f"API Error in {agent_type}: {response}")
             return None
             
         try:
-            # Clean the response more thoroughly
-            cleaned_response = response.strip()
-            
-            # Remove any control characters and invalid Unicode
             import re
+    
+            cleaned_response = response.strip()
+    
+            # ✅ REMOVE markdown blocks
+            cleaned_response = re.sub(r"```json", "", cleaned_response)
+            cleaned_response = re.sub(r"```", "", cleaned_response)
+    
+            # ✅ REMOVE control characters
             cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_response)
-            
-            # Extract JSON from code blocks if present
-            if "```json" in cleaned_response:
-                start_index = cleaned_response.find("```json") + len("```json")
-                end_index = cleaned_response.find("```", start_index)
-                if end_index != -1:
-                    json_str = cleaned_response[start_index:end_index].strip()
-                else:
-                    json_str = cleaned_response[start_index:].strip()
-            elif "```" in cleaned_response:
-                start_index = cleaned_response.find("```") + len("```")
-                end_index = cleaned_response.find("```", start_index)
-                if end_index != -1:
-                    json_str = cleaned_response[start_index:end_index].strip()
-                else:
-                    json_str = cleaned_response[start_index:].strip()
+    
+            # ✅ EXTRACT JSON ONLY (MOST IMPORTANT FIX)
+            start = cleaned_response.find("{")
+            end = cleaned_response.rfind("}")
+    
+            if start != -1 and end != -1:
+                json_str = cleaned_response[start:end+1]
             else:
                 json_str = cleaned_response
-            
-            # Remove any remaining markdown code block markers and extra whitespace
-            json_str = json_str.replace('```', '').strip()
-            
-            # Additional cleaning for common JSON issues
-            json_str = re.sub(r',\s*}', '}', json_str)  # Remove trailing commas
-            json_str = re.sub(r',\s*]', ']', json_str)  # Remove trailing commas in arrays
-            
-            # Try to parse the cleaned JSON
+    
+            # ✅ FIX COMMON JSON ISSUES
+            json_str = re.sub(r',\s*}', '}', json_str)
+            json_str = re.sub(r',\s*]', ']', json_str)
+    
+            # ✅ FIX BROKEN STRINGS (MAIN ISSUE FIX)
+            json_str = re.sub(r'(?<!\\)"\n', '"', json_str)
+            json_str = re.sub(r'\n', ' ', json_str)
+    
+            # ✅ FINAL PARSE
             return json.loads(json_str)
-            
+    
         except json.JSONDecodeError as e:
             st.warning(f"JSON parsing error in {agent_type}: {e}")
-            
-            # Enhanced error recovery - try multiple approaches
+    
             try:
-                # Approach 1: Try to extract JSON array/object using regex
-                array_match = re.search(r'\[\s*\{.*\}\s*\]', json_str, re.DOTALL)
-                if array_match:
-                    return json.loads(array_match.group())
-                
-                # Approach 2: Try to fix common formatting issues
-                # Remove any text before the first [ or {
-                json_str = re.sub(r'^[^\[\{]*', '', json_str)
-                # Remove any text after the last ] or }
-                json_str = re.sub(r'[^\]\}]*$', '', json_str)
-                
-                return json.loads(json_str)
-                
+                # ✅ FALLBACK 1: Extract JSON object
+                import re
+                match = re.search(r'\{.*\}', json_str, re.DOTALL)
+                if match:
+                    return json.loads(match.group())
             except:
-                # Final attempt: Try to manually construct valid JSON
-                st.info(f"Attempting manual JSON reconstruction for {agent_type}...")
-                return self._manual_json_recovery(json_str, agent_type)
-                
+                pass
+    
+            try:
+                # ✅ FALLBACK 2: Clean boundaries
+                json_str = re.sub(r'^[^\[\{]*', '', json_str)
+                json_str = re.sub(r'[^\]\}]*$', '', json_str)
+                return json.loads(json_str)
+            except:
+                pass
+    
+            st.info(f"⚠️ Attempting manual JSON reconstruction for {agent_type}...")
+            return self._manual_json_recovery(json_str, agent_type)
+    
         except Exception as e:
             st.error(f"Unexpected error in {agent_type}: {e}")
             return None
