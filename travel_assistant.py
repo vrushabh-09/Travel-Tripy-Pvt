@@ -1002,13 +1002,14 @@ class BaseAgent:
     def __init__(self, name: str):
         self.name = name
     
-    def call_gemini(self, prompt: str, max_tokens: int = 2000) -> str:
+    def call_gemini(self, prompt: str, max_tokens: int = 500):  # 🔧 reduced tokens
         """Call Gemini AI API with enhanced error handling"""
         if not GEMINI_API_KEY:
-            return "🔑 Gemini API key not configured. Please check your .env file"
+            return "🔑 Gemini API key not configured"
         
-        # FIXED: Use correct Gemini Flash 2.0 model
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        # 🔧 changed model to stable free-tier model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -1019,6 +1020,11 @@ class BaseAgent:
         
         try:
             response = requests.post(url, json=payload, timeout=60)
+
+            # 🔧 handle quota error
+            if response.status_code == 429:
+                return "⚠️ Gemini quota exceeded. Check billing or try later."
+
             if response.status_code == 200:
                 data = response.json()
                 if 'candidates' in data and len(data['candidates']) > 0:
@@ -1032,14 +1038,14 @@ class BaseAgent:
         except Exception as e:
             return f"🔴 Gemini Error: {str(e)}"
     
-    def call_groq(self, prompt: str, max_tokens: int = 2000) -> str:
+    def call_groq(self, prompt: str, max_tokens: int = 500):  # 🔧 reduced tokens
         """Call Groq API for fast responses"""
-        if not GROQ_API_KEY:
-            return "🔑 Groq API key not configured. Please check your .env file"
+        if not GROQ_API_KEY or GROQ_API_KEY.strip() == "":
+            return "🔑 Groq API key not configured"
         
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Authorization": f"Bearer {GROQ_API_KEY.strip()}",  # 🔧 safer
             "Content-Type": "application/json"
         }
         payload = {
@@ -1051,6 +1057,15 @@ class BaseAgent:
         
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=60)
+
+            # 🔧 handle invalid key
+            if response.status_code == 401:
+                return "❌ Invalid Groq API Key"
+
+            # 🔧 handle rate limit
+            if response.status_code == 429:
+                return "⚠️ Groq rate limit exceeded"
+
             if response.status_code == 200:
                 data = response.json()
                 if 'choices' in data and len(data['choices']) > 0:
