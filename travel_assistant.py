@@ -1043,15 +1043,16 @@ class BaseAgent:
             return f"🔴 Gemini Error: {str(e)}"
     
     def call_groq(self, prompt: str, max_tokens: int = 500):
-        """Call Groq API for fast responses"""
         if not GROQ_API_KEY:
             return "🔑 Groq API key not configured"
         
         url = "https://api.groq.com/openai/v1/chat/completions"
     
+        # ✅ FINAL FIX: clean key properly
+        clean_key = GROQ_API_KEY.replace("\n", "").replace("\r", "").strip()
+    
         headers = {
-            # ✅ FIXED: removed .strip() (was breaking key)
-            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Authorization": f"Bearer {clean_key}",
             "Content-Type": "application/json"
         }
     
@@ -1065,92 +1066,68 @@ class BaseAgent:
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=60)
     
-            # ✅ FIXED: proper error handling
             if response.status_code == 401:
-                return "❌ Invalid Groq API Key (check secrets + reboot app)"
+                return "❌ Invalid Groq API Key (FIX: regenerate + reboot app)"
     
             if response.status_code == 429:
                 return "⚠️ Groq rate limit exceeded"
     
             if response.status_code == 200:
                 data = response.json()
-                if 'choices' in data and len(data['choices']) > 0:
-                    return data['choices'][0]['message']['content']
-                else:
-                    return "❌ No response content from Groq API"
+                return data['choices'][0]['message']['content']
             else:
                 return f"❌ Groq API Error {response.status_code}: {response.text}"
     
-        except requests.exceptions.Timeout:
-            return "⏰ Request timeout. Please try again."
         except Exception as e:
             return f"🔴 Groq Error: {str(e)}"
         
     def safe_json_parse(self, response: str, agent_type: str) -> Any:
-        """Safely parse JSON response with enhanced error handling (FIXED)"""
         if response.startswith("❌") or response.startswith("🔴") or response.startswith("⏰"):
             st.error(f"API Error in {agent_type}: {response}")
             return None
-            
+    
         try:
             import re
     
-            cleaned_response = response.strip()
+            cleaned = response.strip()
     
-            # ✅ REMOVE markdown blocks
-            cleaned_response = re.sub(r"```json", "", cleaned_response)
-            cleaned_response = re.sub(r"```", "", cleaned_response)
+            # ✅ remove markdown
+            cleaned = re.sub(r"```json", "", cleaned)
+            cleaned = re.sub(r"```", "", cleaned)
     
-            # ✅ REMOVE control characters
-            cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_response)
+            # ✅ remove control chars
+            cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
     
-            # ✅ EXTRACT JSON ONLY (MOST IMPORTANT FIX)
-            start = cleaned_response.find("{")
-            end = cleaned_response.rfind("}")
+            # 🔥 FIX 1: extract largest valid JSON block
+            json_blocks = re.findall(r'\{[\s\S]*?\}', cleaned)
     
-            if start != -1 and end != -1:
-                json_str = cleaned_response[start:end+1]
-            else:
-                json_str = cleaned_response
+            for block in json_blocks:
+                try:
+                    return json.loads(block)
+                except:
+                    continue
     
-            # ✅ FIX COMMON JSON ISSUES
-            json_str = re.sub(r',\s*}', '}', json_str)
-            json_str = re.sub(r',\s*]', ']', json_str)
+            # 🔥 FIX 2: handle array responses
+            array_blocks = re.findall(r'\[[\s\S]*?\]', cleaned)
     
-            # ✅ FIX BROKEN STRINGS (MAIN ISSUE FIX)
-            json_str = re.sub(r'(?<!\\)"\n', '"', json_str)
-            json_str = re.sub(r'\n', ' ', json_str)
+            for block in array_blocks:
+                try:
+                    return json.loads(block)
+                except:
+                    continue
     
-            # ✅ FINAL PARSE
-            return json.loads(json_str)
+            # 🔥 FIX 3: last attempt (clean full)
+            cleaned = re.sub(r',\s*}', '}', cleaned)
+            cleaned = re.sub(r',\s*]', ']', cleaned)
+            cleaned = cleaned.replace('\n', ' ')
     
-        except json.JSONDecodeError as e:
-            st.warning(f"JSON parsing error in {agent_type}: {e}")
-    
-            try:
-                # ✅ FALLBACK 1: Extract JSON object
-                import re
-                match = re.search(r'\{.*\}', json_str, re.DOTALL)
-                if match:
-                    return json.loads(match.group())
-            except:
-                pass
-    
-            try:
-                # ✅ FALLBACK 2: Clean boundaries
-                json_str = re.sub(r'^[^\[\{]*', '', json_str)
-                json_str = re.sub(r'[^\]\}]*$', '', json_str)
-                return json.loads(json_str)
-            except:
-                pass
-    
-            st.info(f"⚠️ Attempting manual JSON reconstruction for {agent_type}...")
-            return self._manual_json_recovery(json_str, agent_type)
+            return json.loads(cleaned)
     
         except Exception as e:
-            st.error(f"Unexpected error in {agent_type}: {e}")
-            return None
-
+            st.warning(f"JSON parsing error in {agent_type}: {e}")
+            st.info(f"⚠️ Attempting manual JSON reconstruction for {agent_type}...")
+            return self._manual_json_recovery(cleaned, agent_type)
+        
     def _manual_json_recovery(self, json_str: str, agent_type: str) -> Any:
         """Manual JSON recovery when automatic parsing fails"""
         try:
