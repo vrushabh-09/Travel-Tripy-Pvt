@@ -1002,14 +1002,13 @@ class BaseAgent:
     def __init__(self, name: str):
         self.name = name
     
-    def call_gemini(self, prompt: str, max_tokens: int = 500):
+    def call_gemini(self, prompt: str, max_tokens: int = 2000) -> str:
         """Call Gemini AI API with enhanced error handling"""
         if not GEMINI_API_KEY:
-            return "🔑 Gemini API key not configured"
+            return "🔑 Gemini API key not configured. Please check your .env file"
         
-        # ✅ FIXED URL (works for all users)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        
+        # FIXED: Use correct Gemini Flash 2.5 model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -1020,14 +1019,6 @@ class BaseAgent:
         
         try:
             response = requests.post(url, json=payload, timeout=60)
-    
-            # ✅ FIXED: Proper error handling
-            if response.status_code == 429:
-                return "⚠️ Gemini quota exceeded. Enable billing or wait."
-    
-            if response.status_code == 404:
-                return "❌ Gemini model not available. Check API key / enable Gemini API."
-    
             if response.status_code == 200:
                 data = response.json()
                 if 'candidates' in data and len(data['candidates']) > 0:
@@ -1036,98 +1027,112 @@ class BaseAgent:
                     return "❌ No content in response from Gemini API"
             else:
                 return f"❌ Gemini API Error {response.status_code}: {response.text}"
-    
         except requests.exceptions.Timeout:
             return "⏰ Request timeout. Please try again."
         except Exception as e:
             return f"🔴 Gemini Error: {str(e)}"
     
-    def call_groq(self, prompt: str, max_tokens: int = 500):
+    def call_groq(self, prompt: str, max_tokens: int = 2000) -> str:
+        """Call Groq API for fast responses"""
         if not GROQ_API_KEY:
-            return "🔑 Groq API key not configured"
+            return "🔑 Groq API key not configured. Please check your .env file"
         
         url = "https://api.groq.com/openai/v1/chat/completions"
-    
-        # ✅ FINAL FIX: clean key properly
-        clean_key = GROQ_API_KEY.replace("\n", "").replace("\r", "").strip()
-    
         headers = {
-            "Authorization": f"Bearer {clean_key}",
+            "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json"
         }
-    
         payload = {
             "model": "llama-3.1-8b-instant",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.7
         }
-    
+        
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=60)
-    
-            if response.status_code == 401:
-                return "❌ Invalid Groq API Key (FIX: regenerate + reboot app)"
-    
-            if response.status_code == 429:
-                return "⚠️ Groq rate limit exceeded"
-    
             if response.status_code == 200:
                 data = response.json()
-                return data['choices'][0]['message']['content']
+                if 'choices' in data and len(data['choices']) > 0:
+                    return data['choices'][0]['message']['content']
+                else:
+                    return "❌ No response content from Groq API"
             else:
                 return f"❌ Groq API Error {response.status_code}: {response.text}"
-    
+        except requests.exceptions.Timeout:
+            return "⏰ Request timeout. Please try again."
         except Exception as e:
             return f"🔴 Groq Error: {str(e)}"
-        
+
     def safe_json_parse(self, response: str, agent_type: str) -> Any:
+        """Safely parse JSON response with comprehensive error handling and character cleaning"""
         if response.startswith("❌") or response.startswith("🔴") or response.startswith("⏰"):
             st.error(f"API Error in {agent_type}: {response}")
             return None
-    
+            
         try:
+            # Clean the response more thoroughly
+            cleaned_response = response.strip()
+            
+            # Remove any control characters and invalid Unicode
             import re
-    
-            cleaned = response.strip()
-    
-            # ✅ remove markdown
-            cleaned = re.sub(r"```json", "", cleaned)
-            cleaned = re.sub(r"```", "", cleaned)
-    
-            # ✅ remove control chars
-            cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
-    
-            # 🔥 FIX 1: extract largest valid JSON block
-            json_blocks = re.findall(r'\{[\s\S]*?\}', cleaned)
-    
-            for block in json_blocks:
-                try:
-                    return json.loads(block)
-                except:
-                    continue
-    
-            # 🔥 FIX 2: handle array responses
-            array_blocks = re.findall(r'\[[\s\S]*?\]', cleaned)
-    
-            for block in array_blocks:
-                try:
-                    return json.loads(block)
-                except:
-                    continue
-    
-            # 🔥 FIX 3: last attempt (clean full)
-            cleaned = re.sub(r',\s*}', '}', cleaned)
-            cleaned = re.sub(r',\s*]', ']', cleaned)
-            cleaned = cleaned.replace('\n', ' ')
-    
-            return json.loads(cleaned)
-    
-        except Exception as e:
+            cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_response)
+            
+            # Extract JSON from code blocks if present
+            if "```json" in cleaned_response:
+                start_index = cleaned_response.find("```json") + len("```json")
+                end_index = cleaned_response.find("```", start_index)
+                if end_index != -1:
+                    json_str = cleaned_response[start_index:end_index].strip()
+                else:
+                    json_str = cleaned_response[start_index:].strip()
+            elif "```" in cleaned_response:
+                start_index = cleaned_response.find("```") + len("```")
+                end_index = cleaned_response.find("```", start_index)
+                if end_index != -1:
+                    json_str = cleaned_response[start_index:end_index].strip()
+                else:
+                    json_str = cleaned_response[start_index:].strip()
+            else:
+                json_str = cleaned_response
+            
+            # Remove any remaining markdown code block markers and extra whitespace
+            json_str = json_str.replace('```', '').strip()
+            
+            # Additional cleaning for common JSON issues
+            json_str = re.sub(r',\s*}', '}', json_str)  # Remove trailing commas
+            json_str = re.sub(r',\s*]', ']', json_str)  # Remove trailing commas in arrays
+            
+            # Try to parse the cleaned JSON
+            return json.loads(json_str)
+            
+        except json.JSONDecodeError as e:
             st.warning(f"JSON parsing error in {agent_type}: {e}")
-            st.info(f"⚠️ Attempting manual JSON reconstruction for {agent_type}...")
-            return self._manual_json_recovery(cleaned, agent_type)
-        
+            
+            # Enhanced error recovery - try multiple approaches
+            try:
+                # Approach 1: Try to extract JSON array/object using regex
+                array_match = re.search(r'\[\s*\{.*\}\s*\]', json_str, re.DOTALL)
+                if array_match:
+                    return json.loads(array_match.group())
+                
+                # Approach 2: Try to fix common formatting issues
+                # Remove any text before the first [ or {
+                json_str = re.sub(r'^[^\[\{]*', '', json_str)
+                # Remove any text after the last ] or }
+                json_str = re.sub(r'[^\]\}]*$', '', json_str)
+                
+                return json.loads(json_str)
+                
+            except:
+                # Final attempt: Try to manually construct valid JSON
+                st.info(f"Attempting manual JSON reconstruction for {agent_type}...")
+                return self._manual_json_recovery(json_str, agent_type)
+                
+        except Exception as e:
+            st.error(f"Unexpected error in {agent_type}: {e}")
+            return None
+
     def _manual_json_recovery(self, json_str: str, agent_type: str) -> Any:
         """Manual JSON recovery when automatic parsing fails"""
         try:
