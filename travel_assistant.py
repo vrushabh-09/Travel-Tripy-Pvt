@@ -52,6 +52,14 @@ st.set_page_config(
 # warning instead of a stack trace.
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
+# GROQ_MODEL: swapped from "llama-3.1-8b-instant" to "gemma2-9b-it" — same
+# free-tier request/day quota, but roughly 2.5x the tokens-per-minute
+# allowance (15,000 TPM vs 6,000 TPM as of mid-2026), which gives more
+# headroom before hitting 429s during the sequential budget/itinerary/
+# local-experience calls. Trade-off is an 8K context window instead of
+# 128K, which isn't a constraint for this app's prompt sizes. Change this
+# one constant to switch models again later.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "gemma2-9b-it")
 # NOTE: OPENTRIPMAP_API_KEY was previously loaded but never used anywhere in
 # the app. It's kept here (for the real-geocoding improvement suggested
 # below) but is optional, so a missing key won't crash startup.
@@ -1041,8 +1049,63 @@ class BaseAgent:
     def __init__(self, name: str):
         self.name = name
 
+    @staticmethod
+    def _extract_retry_after_seconds(response) -> float:
+        """Figure out how long to wait before retrying a 429 response.
+
+        Prefers the standard `Retry-After` header; falls back to parsing
+        the "Please try again in Xs" hint that Groq/Gemini include in their
+        429 error body (e.g. "Please try again in 2.219999999s").
+        """
+        header_val = response.headers.get("Retry-After") if response is not None else None
+        if header_val:
+            try:
+                return max(float(header_val), 0.5)
+            except ValueError:
+                pass
+
+        try:
+            body = response.text if response is not None else ""
+            match = re.search(r'try again in\s+([\d.]+)s', body, re.IGNORECASE)
+            if match:
+                return max(float(match.group(1)), 0.5)
+        except Exception:
+            pass
+
+        return 3.0  # sensible default if no hint is present
+
+    def _post_with_retry(self, url: str, headers: Optional[Dict[str, str]], payload: Dict[str, Any],
+                          max_retries: int = 4, timeout: int = 60):
+        """POST with automatic retry/backoff on HTTP 429 (rate limit).
+
+        Rate limits on free API tiers (e.g. Groq's 6000 TPM) are transient —
+        the previous implementation treated a 429 exactly like any other
+        error and immediately gave up, falling back to default/sample data.
+        This retries a handful of times, waiting the amount of time the API
+        itself reports (or an exponential backoff if it doesn't say), so a
+        momentary rate-limit bump doesn't need to nuke the whole generation
+        step.
+        """
+        last_response = None
+        for attempt in range(max_retries + 1):
+            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+
+            if response.status_code != 429:
+                return response
+
+            last_response = response
+            if attempt < max_retries:
+                wait_seconds = self._extract_retry_after_seconds(response)
+                # small buffer on top of the API's own estimate, plus mild
+                # growth as a safety net if repeated 429s occur
+                wait_seconds = wait_seconds + 0.5 + attempt
+                st.info(f"⏳ Rate limit hit — retrying in {wait_seconds:.1f}s (attempt {attempt + 1}/{max_retries})...")
+                time.sleep(wait_seconds)
+
+        return last_response
+
     def call_gemini(self, prompt: str, max_tokens: int = 2000) -> str:
-        """Call Gemini AI API with error handling."""
+        """Call Gemini AI API with error handling and 429 retry/backoff."""
         if not GEMINI_API_KEY:
             return "🔑 Gemini API key not configured. Please check your secrets/.env file"
 
@@ -1056,7 +1119,7 @@ class BaseAgent:
         }
 
         try:
-            response = requests.post(url, json=payload, timeout=60)
+            response = self._post_with_retry(url, None, payload)
             if response.status_code == 200:
                 data = response.json()
                 if 'candidates' in data and len(data['candidates']) > 0:
@@ -1069,7 +1132,7 @@ class BaseAgent:
             return f"🔴 Gemini Error: {str(e)}"
 
     def call_groq(self, prompt: str, max_tokens: int = 2000) -> str:
-        """Call Groq API for fast responses."""
+        """Call Groq API for fast responses, with 429 retry/backoff."""
         if not GROQ_API_KEY:
             return "🔑 Groq API key not configured. Please check your secrets/.env file"
 
@@ -1086,7 +1149,7 @@ class BaseAgent:
         }
 
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response = self._post_with_retry(url, headers, payload)
             if response.status_code == 200:
                 data = response.json()
                 if 'choices' in data and len(data['choices']) > 0:
@@ -1297,7 +1360,10 @@ class BudgetPlanningAgent(BaseAgent):
             Make the budget realistic for the destination and travel style.
             Return ONLY the JSON object, no additional text.
             """
-            response = self.call_groq(prompt)
+            # This payload is small and structured, so it doesn't need the
+            # full 2000-token default — trimming it reduces pressure on
+            # Groq's free-tier tokens-per-minute limit.
+            response = self.call_groq(prompt, max_tokens=900)
             parsed_data = self.safe_json_parse(response, "budget")
 
             if parsed_data is None:
@@ -1650,7 +1716,12 @@ class TravelCoordinator:
                     plan['local_experiences'] = self.local_agent.get_local_attractions(
                         travel_plan.destination, travel_plan.interests or [])
 
-                time.sleep(0.5)
+                # Budget, itinerary, and local-experiences all call Groq in
+                # sequence. A slightly longer pause here (vs. the original
+                # 0.5s) gives the free-tier tokens-per-minute window a
+                # little more room to recover between calls, on top of the
+                # retry/backoff already built into call_groq().
+                time.sleep(1.5)
 
             plan['travel_plan'] = travel_plan
             plan['created_at'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
